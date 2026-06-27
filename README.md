@@ -14,7 +14,6 @@ Final Project — Mata Kuliah Big Data
 | 2 | Naila Raniyah Hanan | 5027241078 |
 | 3 | Ahmad Ibnu Athaillah | 5027241024|
 
-
 ---
 
 ## Deskripsi Masalah
@@ -75,51 +74,22 @@ TomTom API + OpenWeatherMap
 
 ```
 fuelwatch/
-├── docker-compose.yml           # Unified — semua services
-├── .env.example                 # Template konfigurasi
-├── scripts/
-│   └── start.sh                 # Script one-command startup
-├── db/
-│   └── init.sql                 # Medallion schema (Bronze/Silver/Gold)
-├── collector/                   # Kafka Producer (TomTom + OpenWeather)
-│   ├── main.py
-│   ├── requirements.txt
-│   └── Dockerfile
-├── bronze_consumer/             # Kafka Consumer → Bronze layer
-│   ├── main.py
-│   ├── requirements.txt
-│   └── Dockerfile
-├── spark_processor/             # PySpark: Silver/Gold + 3 ML models
-│   ├── main.py
-│   ├── requirements.txt
-│   └── Dockerfile
-├── seeder/                      # Batch historical data → Bronze
-│   ├── seed_data.py
-│   └── Dockerfile
-├── api/                         # FastAPI REST API
-│   ├── main.py
-│   ├── models.py
-│   ├── requirements.txt
-│   └── Dockerfile
-├── dashboard/
-│   └── frontend/                # Leaflet + Chart.js (dashboard sekunder)
-├── ml/                          # Skrip ML offline
-│   ├── kmeans_clustering.py
-│   ├── lstm_mobility.py
-│   └── correlation_analytics.py
-├── processing/                  # Legacy Spark Streaming
-│   └── spark_streaming/
-│       ├── etl_pipeline.py
-│       └── feature_engineering.py
-├── ingestion/                   # Legacy producers
-│   └── producers/
-│       ├── fuel_price_producer.py
-│       ├── traffic_producer.py
-│       ├── weather_producer.py
-│       └── transport_producer.py
-└── data_lake/                   # Parquet lakehouse (bind-mount)
-    ├── bronze/                  # Raw partitioned by city/date
-    └── silver/                  # Cleaned, partitioned by city/date
+├── docker-compose.yml
+├── .env.example
+├── scripts/start.sh
+├── db/init.sql
+├── collector/
+├── bronze_consumer/
+├── spark_processor/
+├── seeder/
+├── api/
+├── dashboard/frontend/
+├── ml/
+├── processing/
+├── ingestion/
+└── data_lake/
+    ├── bronze/
+    └── silver/
 ```
 
 ---
@@ -137,64 +107,24 @@ fuelwatch/
 | **API Service** | FastAPI, Uvicorn |
 | **Dashboard Utama** | Streamlit |
 | **Dashboard Sekunder** | HTML, JavaScript, Leaflet.js, Chart.js |
-| **External APIs** | TomTom Traffic API, OpenWeatherMap API |
-
----
-
-## Medallion Lakehouse
-
-| Layer | Tabel | Isi |
-|-------|-------|-----|
-| **Bronze** | `bronze_traffic`, `bronze_weather` | Raw data dari Kafka + seeder (tanpa transformasi) |
-| **Silver** | `silver_traffic` | Cleaned, dedup, feature engineering |
-| **Gold** | `gold_city_comparison`, `gold_hourly_pattern`, `gold_daily_summary` | Agregat siap dashboard |
-| **Gold ML** | `gold_predictions`, `gold_model_metrics`, `gold_road_clusters`, `gold_anomalies` | Hasil 3 model ML |
-
-File Parquet tersimpan di `data_lake/bronze/` dan `data_lake/silver/` (partitioned by city/date).
-
----
-
-##  Machine Learning (Spark MLlib)
-
-| Model | Teknik | Output |
-|-------|--------|--------|
-| **Forecasting** | Random Forest Classifier | Prediksi congestion 30 & 60 menit ke depan |
-| **Clustering** | K-Means | Zona dampak BBM per ruas jalan |
-| **Anomaly Detection** | Z-score | Deteksi lonjakan kemacetan abnormal pasca kenaikan BBM |
-
-Skrip ML offline tambahan tersedia di folder `ml/`:
-- `lstm_mobility.py` — prediksi mobilitas dengan LSTM
-- `correlation_analytics.py` — analisis korelasi BBM ↔ mobilitas
+| **External APIs** | TomTom Traffic API |
 
 ---
 
 ## Cara Menjalankan
 
 ### Prasyarat
-
-- Docker & Docker Compose sudah ter-install dan Docker Engine sedang berjalan
+- Docker & Docker Compose sudah ter-install
 - API Key dari [TomTom Developer](https://developer.tomtom.com/)
 
 ### 1. Setup Environment
 
 ```bash
 cp .env.example .env
-```
-
-Buka file `.env` dan isi nilai berikut:
-
-```env
-TOMTOM_API_KEY=isi_api_key_tomtom_kamu_disini
+# Edit .env → isi TOMTOM_API_KEY
 ```
 
 ### 2. Jalankan Proyek (1 Command)
-
-```bash
-chmod +x scripts/start.sh
-./scripts/start.sh
-```
-
-Atau langsung dengan Docker Compose:
 
 ```bash
 docker compose up --build -d
@@ -202,32 +132,105 @@ docker compose up --build -d
 
 ### 3. Tunggu Pipeline Pertama Selesai
 
-Pipeline berjalan secara otomatis dalam urutan berikut:
+| Tahap | Service | Estimasi | Keterangan |
+|-------|---------|----------|------------|
+| 1 | `seeder` | ~1–2 menit | Isi Bronze dengan data historis |
+| 2 | `collector` | Terus berjalan | Publish live data ke Kafka |
+| 3 | `bronze_consumer` | Terus berjalan | Simpan ke Postgres + Parquet |
+| 4 | `spark_processor` | ~2–3 menit/siklus | Proses Silver/Gold/ML tiap 5 menit |
 
-| Tahap | Service | Estimasi Waktu | Keterangan |
-|-------|---------|----------------|------------|
-| 1 | `seeder` | ~1–2 menit | Mengisi Bronze dengan data historis (1 Mei – 19 Jun 2026) |
-| 2 | `collector` | Berjalan terus | Mulai publish live data ke Kafka |
-| 3 | `bronze_consumer` | Berjalan terus | Tulis data ke Postgres + Parquet |
-| 4 | `spark_processor` | ~2–3 menit/siklus | Proses Silver/Gold/ML setiap 5 menit |
-
-Monitor log spark processor:
-
+Monitor log:
 ```bash
 docker compose logs -f spark_processor
 ```
 
 ### 4. Akses Dashboard & API
 
-| Service | URL | Keterangan |
-|---------|-----|------------|
-| **Streamlit Dashboard** | http://localhost:8501 | Dashboard utama (5 tab analitik) |
-| **FastAPI Swagger** | http://localhost:8000/docs | Dokumentasi REST API |
-| **Leaflet Frontend** | http://localhost:3000 | Dashboard peta sekunder |
+| Service | URL |
+|---------|-----|
+| Streamlit Dashboard | http://localhost:8501 |
+| FastAPI Swagger | http://localhost:8000/docs |
+| Leaflet Frontend | http://localhost:3000 |
 
 ---
 
-## API Endpoints (FastAPI)
+##  Screenshot
+
+### 1. Docker — Semua Container Running
+jalankan `docker compose ps` di terminal atau buka Docker Desktop, screenshot semua container berstatus **running/green**
+
+
+<img width="1169" height="188" alt="image" src="https://github.com/user-attachments/assets/a4bf1e67-7a79-4d92-9773-b5914ce0d554" />
+
+---
+
+### 2. Kafka Streaming — Data Mengalir
+terminal yang menampilkan log `collector` mengirim data dan `bronze_consumer` menerimanya
+<img width="1205" height="195" alt="image" src="https://github.com/user-attachments/assets/c13ef334-54a4-40ee-a7be-e02d6e762c17" />
+
+
+
+---
+
+### 3. Streamlit Dashboard — Tab Overview
+ buka http://localhost:8501 
+
+<img width="665" height="636" alt="image" src="https://github.com/user-attachments/assets/882ab491-59f6-4eb1-9454-175b4913f5ed" />
+
+
+---
+
+### 4. Streamlit Dashboard — Tab Analitik
+ klik tab-tab lain di http://localhost:8501 
+
+<img width="675" height="614" alt="image" src="https://github.com/user-attachments/assets/4ec2abdf-8dc7-4fed-be88-4044d3d02cde" />
+
+
+---
+
+### 5. FastAPI Swagger
+ buka http://localhost:8000/docs 
+<img width="653" height="619" alt="image" src="https://github.com/user-attachments/assets/c0f7e382-7d95-4461-8218-68ca5a04e9c3" />
+
+
+---
+
+### 6. Leaflet Frontend — Peta Interaktif
+ buka http://localhost:3000
+<img width="687" height="523" alt="image" src="https://github.com/user-attachments/assets/ba130a55-3adc-4229-aa06-ac24a1e90d40" />
+
+
+---
+
+### 7. Spark Processor — ML Berjalan
+ jalankan `docker compose logs spark_processor`
+<img width="1171" height="197" alt="image" src="https://github.com/user-attachments/assets/a11ff6dc-644b-4a39-80b5-4166db99d9e6" />
+
+
+---
+
+## 🥉🥈🥇 Medallion Lakehouse
+
+| Layer | Tabel | Isi |
+|-------|-------|-----|
+| **Bronze** | `bronze_traffic`, `bronze_weather` | Raw data dari Kafka + seeder |
+| **Silver** | `silver_traffic` | Cleaned, dedup, feature engineering |
+| **Gold** | `gold_city_comparison`, `gold_hourly_pattern`, `gold_daily_summary` | Agregat siap dashboard |
+| **Gold ML** | `gold_predictions`, `gold_model_metrics`, `gold_road_clusters`, `gold_anomalies` | Hasil 3 model ML |
+
+---
+
+## 🤖Machine Learning (Spark MLlib)
+
+| Model | Teknik | Output |
+|-------|--------|--------|
+| **Forecasting** | Random Forest Classifier | Prediksi congestion 30 & 60 menit ke depan |
+| **Clustering** | K-Means | Zona dampak BBM per ruas jalan |
+| **Anomaly Detection** | Z-score | Deteksi lonjakan kemacetan abnormal pasca kenaikan BBM |
+
+---
+
+## 🔌 API Endpoints (FastAPI)
 
 ```
 GET  /health
@@ -236,48 +239,44 @@ GET  /api/v1/mobility/score?city=Jakarta
 GET  /api/v1/forecast?city=Jakarta
 GET  /api/v1/clusters
 GET  /api/v1/alerts
-GET  /api/v1/gold/summary          — snapshot Gold + Redis
-GET  /api/v1/lakehouse/stats       — row count per layer
-WS   /ws/live/{city}               — WebSocket real-time
+GET  /api/v1/gold/summary
+GET  /api/v1/lakehouse/stats
+WS   /ws/live/{city}
 ```
 
 ---
 
 ## Port Mapping
 
-Port disesuaikan agar tidak bentrok dengan service lokal (WSL-friendly):
-
-| Service | Port Host | Catatan |
-|---------|-----------|---------|
-| PostgreSQL | **5433** | 5432 sering dipakai PostgreSQL lokal |
-| Kafka | **9094** | 9092 sering dipakai Kafka/Hadoop lab |
-| Redis | 6379 | |
-| Streamlit | 8501 | |
-| FastAPI | 8000 | |
-| Frontend | 3000 | |
+| Service | Port |
+|---------|------|
+| PostgreSQL | 5433 |
+| Kafka | 9094 |
+| Redis | 6379 |
+| Streamlit | 8501 |
+| FastAPI | 8000 |
+| Frontend | 3000 |
 
 ---
 
 ## Menghentikan Proyek
 
 ```bash
-# Hentikan semua service
 docker compose down
 
-# Hentikan dan hapus semua data (termasuk volume)
+# Hapus semua data juga
 docker compose down -v && rm -rf data_lake/bronze/* data_lake/silver/*
 ```
 
 ---
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
 | Masalah | Solusi |
 |---------|--------|
-| **Dashboard kosong** | Tunggu `spark_processor` selesai siklus pertama: `docker logs fuelwatch-spark-processor` |
-| **Collector error API** | Pastikan `.env` berisi `TOMTOM_API_KEY` yang valid. Sistem tetap jalan dengan data seeder saja |
-| **Port conflict** | Ubah port mapping di `docker-compose.yml` sesuai kebutuhan |
-| **Seeder tidak jalan** | Pastikan PostgreSQL sudah healthy dulu sebelum seeder dimulai |
+| **Dashboard kosong** | Tunggu `spark_processor` siklus pertama selesai |
+| **Collector error API** | Pastikan `TOMTOM_API_KEY` di `.env` valid |
+| **Port conflict** | Ubah port di `docker-compose.yml` |
 
 ---
 
@@ -292,3 +291,5 @@ docker compose down -v && rm -rf data_lake/bronze/* data_lake/silver/*
 | Real-time Kafka streaming | ❌ | Parsial | ✅ |
 
 ---
+
+*Dikembangkan untuk Final Project Mata Kuliah Big Data*
