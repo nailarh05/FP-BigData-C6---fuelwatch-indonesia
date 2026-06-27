@@ -4,11 +4,46 @@
 
 Final Project — Mata Kuliah Big Data
 
-> **Integrasi v2:** Pipeline `fuelwatch_v2` (Medallion Lakehouse + Spark MLlib + Streamlit) telah diintegrasikan sebagai **pipeline utama**. Komponen v1 (FastAPI REST, Leaflet dashboard, skrip ML offline) tetap tersedia sebagai lapisan tambahan.
+---
+
+## Daftar Anggota
+
+| No | Nama Lengkap | NRP |
+|----|--------------|-----|
+| 1 | Hansen Chang | 5027241028 |
+| 2 | Naila Raniyah Hanan | 5027241078 |
+| 3 | Ahmad Ibnu Athaillah | 5027241024|
+
 
 ---
 
-## Arsitektur Terintegrasi
+## Deskripsi Masalah
+
+Kenaikan harga Bahan Bakar Minyak (BBM) di Indonesia berdampak langsung pada pola mobilitas masyarakat perkotaan. Namun, korelasi antara perubahan harga BBM dan pergerakan lalu lintas selama ini belum pernah dianalisis secara real-time dan sistematis. Proyek **FuelWatch** hadir untuk menjawab kesenjangan tersebut dengan membangun pipeline big data end-to-end yang mampu mengumpulkan, memproses, dan menganalisis data lalu lintas dan cuaca secara streaming, lalu menyajikannya dalam sebuah dashboard interaktif yang mudah dipahami.
+
+---
+
+## Tujuan Proyek
+
+1. Membangun pipeline data streaming real-time menggunakan **Apache Kafka** untuk menangani data lalu lintas (TomTom API) dan cuaca (OpenWeatherMap API).
+2. Mengimplementasikan arsitektur **Medallion Lakehouse** (Bronze → Silver → Gold) menggunakan **PostgreSQL** dan **Parquet** sebagai penyimpanan terdistribusi.
+3. Melatih dan menjalankan **3 model Machine Learning** menggunakan Apache Spark MLlib: Random Forest (forecasting), K-Means (clustering), dan Z-score (anomaly detection).
+4. Menyajikan seluruh wawasan dalam **dashboard interaktif Streamlit** dan **REST API FastAPI**.
+
+---
+
+## Dataset & Sumber Data
+
+| Sumber | Jenis | Deskripsi |
+|--------|-------|-----------|
+| **TomTom Traffic API** | Real-time | Data kemacetan, kecepatan, dan kondisi jalan per ruas di kota besar |
+| **Historical Seeder** | Batch | Data historis 1 Mei – 19 Juni 2026 (periode sebelum & sesudah kenaikan BBM) |
+
+Tanggal acuan kenaikan BBM: **10 Juni 2026** (dapat dikonfigurasi melalui `.env`)
+
+---
+
+## Arsitektur Solusi (Medallion Lakehouse)
 
 ```
 TomTom API + OpenWeatherMap
@@ -36,101 +71,163 @@ TomTom API + OpenWeatherMap
 
 ---
 
-## Struktur Project
+## Struktur Proyek
 
 ```
-fpbigdat/
-├── docker-compose.yml           # Unified — semua services v2 + v1
-├── .env.example
-├── db/init.sql                  # Medallion schema (Bronze/Silver/Gold)
+fuelwatch/
+├── docker-compose.yml           # Unified — semua services
+├── .env.example                 # Template konfigurasi
+├── scripts/
+│   └── start.sh                 # Script one-command startup
+├── db/
+│   └── init.sql                 # Medallion schema (Bronze/Silver/Gold)
 ├── collector/                   # Kafka Producer (TomTom + OpenWeather)
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── bronze_consumer/             # Kafka Consumer → Bronze layer
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── spark_processor/             # PySpark: Silver/Gold + 3 ML models
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── seeder/                      # Batch historical data → Bronze
+│   ├── seed_data.py
+│   └── Dockerfile
+├── api/                         # FastAPI REST API
+│   ├── main.py
+│   ├── models.py
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── dashboard/
-│   ├── streamlit/               # Dashboard utama (v2)
-│   └── frontend/                # Leaflet + Chart.js (v1)
-├── api/                         # FastAPI — baca Gold layer + Redis
-├── ml/                          # Skrip ML offline (LSTM, korelasi)
-├── ingestion/                   # Legacy producers v1 (opsional)
-├── processing/                  # Legacy Spark Streaming v1 (opsional)
-├── data_lake/                   # Parquet lakehouse (bind-mount)
-└── fuelwatch_v2/                # Salinan asli (legacy reference)
+│   └── frontend/                # Leaflet + Chart.js (dashboard sekunder)
+├── ml/                          # Skrip ML offline
+│   ├── kmeans_clustering.py
+│   ├── lstm_mobility.py
+│   └── correlation_analytics.py
+├── processing/                  # Legacy Spark Streaming
+│   └── spark_streaming/
+│       ├── etl_pipeline.py
+│       └── feature_engineering.py
+├── ingestion/                   # Legacy producers
+│   └── producers/
+│       ├── fuel_price_producer.py
+│       ├── traffic_producer.py
+│       ├── weather_producer.py
+│       └── transport_producer.py
+└── data_lake/                   # Parquet lakehouse (bind-mount)
+    ├── bronze/                  # Raw partitioned by city/date
+    └── silver/                  # Cleaned, partitioned by city/date
 ```
+
+---
+
+## Tech Stack
+
+| Kategori | Teknologi |
+|----------|-----------|
+| **Containerization** | Docker, Docker Compose |
+| **Data Streaming** | Apache Kafka 3.7.0 (KRaft — tanpa Zookeeper) |
+| **Data Lake Storage** | PostgreSQL 16, Apache Parquet |
+| **Batch Ingestion** | Python Seeder (data historis) |
+| **Stream Processing & ML** | Apache Spark (PySpark), MLlib |
+| **Cache & Real-time** | Redis 7 |
+| **API Service** | FastAPI, Uvicorn |
+| **Dashboard Utama** | Streamlit |
+| **Dashboard Sekunder** | HTML, JavaScript, Leaflet.js, Chart.js |
+| **External APIs** | TomTom Traffic API, OpenWeatherMap API |
+
+---
+
+## Medallion Lakehouse
+
+| Layer | Tabel | Isi |
+|-------|-------|-----|
+| **Bronze** | `bronze_traffic`, `bronze_weather` | Raw data dari Kafka + seeder (tanpa transformasi) |
+| **Silver** | `silver_traffic` | Cleaned, dedup, feature engineering |
+| **Gold** | `gold_city_comparison`, `gold_hourly_pattern`, `gold_daily_summary` | Agregat siap dashboard |
+| **Gold ML** | `gold_predictions`, `gold_model_metrics`, `gold_road_clusters`, `gold_anomalies` | Hasil 3 model ML |
+
+File Parquet tersimpan di `data_lake/bronze/` dan `data_lake/silver/` (partitioned by city/date).
+
+---
+
+##  Machine Learning (Spark MLlib)
+
+| Model | Teknik | Output |
+|-------|--------|--------|
+| **Forecasting** | Random Forest Classifier | Prediksi congestion 30 & 60 menit ke depan |
+| **Clustering** | K-Means | Zona dampak BBM per ruas jalan |
+| **Anomaly Detection** | Z-score | Deteksi lonjakan kemacetan abnormal pasca kenaikan BBM |
+
+Skrip ML offline tambahan tersedia di folder `ml/`:
+- `lstm_mobility.py` — prediksi mobilitas dengan LSTM
+- `correlation_analytics.py` — analisis korelasi BBM ↔ mobilitas
 
 ---
 
 ## Cara Menjalankan
 
-### 1. Setup environment
+### Prasyarat
+
+- Docker & Docker Compose sudah ter-install dan Docker Engine sedang berjalan
+- API Key dari [TomTom Developer](https://developer.tomtom.com/)
+
+### 1. Setup Environment
 
 ```bash
 cp .env.example .env
-# Edit .env — isi TOMTOM_API_KEY dan OPENWEATHER_API_KEY
 ```
 
-### 2. Start semua services
+Buka file `.env` dan isi nilai berikut:
+
+```env
+TOMTOM_API_KEY=isi_api_key_tomtom_kamu_disini
+```
+
+### 2. Jalankan Proyek (1 Command)
 
 ```bash
 chmod +x scripts/start.sh
 ./scripts/start.sh
 ```
 
-Atau manual:
+Atau langsung dengan Docker Compose:
 
 ```bash
 docker compose up --build -d
 ```
 
-### 3. Akses dashboard & API
+### 3. Tunggu Pipeline Pertama Selesai
 
-| Service | URL | Keterangan |
-|---------|-----|------------|
-| **Streamlit Dashboard** | http://localhost:8501 | Dashboard utama v2 (5 tab) |
-| FastAPI Swagger | http://localhost:8000/docs | REST API Gold layer |
-| Leaflet Frontend | http://localhost:3000 | Dashboard sekunder v1 |
-| PostgreSQL | localhost:5433 | user: `fuelwatch` / pass: `fuelwatch123` |
-| Kafka | localhost:9094 | Apache KRaft (tanpa Zookeeper) |
+Pipeline berjalan secara otomatis dalam urutan berikut:
 
-### 4. Tunggu pipeline pertama
+| Tahap | Service | Estimasi Waktu | Keterangan |
+|-------|---------|----------------|------------|
+| 1 | `seeder` | ~1–2 menit | Mengisi Bronze dengan data historis (1 Mei – 19 Jun 2026) |
+| 2 | `collector` | Berjalan terus | Mulai publish live data ke Kafka |
+| 3 | `bronze_consumer` | Berjalan terus | Tulis data ke Postgres + Parquet |
+| 4 | `spark_processor` | ~2–3 menit/siklus | Proses Silver/Gold/ML setiap 5 menit |
 
-1. `seeder` — isi Bronze historis (1 Mei–19 Jun 2026) → selesai ~1-2 menit
-2. `collector` — mulai publish live data ke Kafka
-3. `bronze_consumer` — tulis ke Postgres + Parquet
-4. `spark_processor` — siklus pertama Silver/Gold/ML → ~2-3 menit
+Monitor log spark processor:
 
 ```bash
 docker compose logs -f spark_processor
 ```
 
----
+### 4. Akses Dashboard & API
 
-## Medallion Lakehouse (fuelwatch_v2)
-
-| Layer | Tabel | Isi |
-|-------|-------|-----|
-| **Bronze** | `bronze_traffic`, `bronze_weather` | Raw data dari Kafka + seeder |
-| **Silver** | `silver_traffic` | Cleaned, dedup, feature engineering |
-| **Gold** | `gold_city_comparison`, `gold_hourly_pattern`, `gold_daily_summary` | Agregat siap dashboard |
-| **Gold ML** | `gold_predictions`, `gold_model_metrics`, `gold_road_clusters`, `gold_anomalies` | Hasil 3 model ML |
-
-Parquet files: `data_lake/bronze/` dan `data_lake/silver/` (partitioned by city/date)
+| Service | URL | Keterangan |
+|---------|-----|------------|
+| **Streamlit Dashboard** | http://localhost:8501 | Dashboard utama (5 tab analitik) |
+| **FastAPI Swagger** | http://localhost:8000/docs | Dokumentasi REST API |
+| **Leaflet Frontend** | http://localhost:3000 | Dashboard peta sekunder |
 
 ---
 
-## Machine Learning (Spark MLlib)
-
-| Model | Teknik | Output |
-|-------|--------|--------|
-| Forecasting | Random Forest Classifier | Prediksi congestion 30 & 60 menit |
-| Clustering | K-Means | Zona dampak BBM per ruas jalan |
-| Anomaly Detection | Z-score | Lonjakan kemacetan abnormal pasca BBM |
-
-Skrip ML offline tambahan (v1): `ml/lstm_mobility.py`, `ml/correlation_analytics.py`
-
----
-
-## API Endpoints (FastAPI — terintegrasi Gold layer)
+## API Endpoints (FastAPI)
 
 ```
 GET  /health
@@ -139,16 +236,16 @@ GET  /api/v1/mobility/score?city=Jakarta
 GET  /api/v1/forecast?city=Jakarta
 GET  /api/v1/clusters
 GET  /api/v1/alerts
-GET  /api/v1/gold/summary          ← baru: snapshot Gold + Redis
-GET  /api/v1/lakehouse/stats       ← baru: row count per layer
-WS   /ws/live/{city}
+GET  /api/v1/gold/summary          — snapshot Gold + Redis
+GET  /api/v1/lakehouse/stats       — row count per layer
+WS   /ws/live/{city}               — WebSocket real-time
 ```
 
 ---
 
-## Port Mapping (WSL-friendly)
+## Port Mapping
 
-Port disesuaikan agar tidak bentrok dengan service lokal:
+Port disesuaikan agar tidak bentrok dengan service lokal (WSL-friendly):
 
 | Service | Port Host | Catatan |
 |---------|-----------|---------|
@@ -161,25 +258,37 @@ Port disesuaikan agar tidak bentrok dengan service lokal:
 
 ---
 
+## Menghentikan Proyek
+
+```bash
+# Hentikan semua service
+docker compose down
+
+# Hentikan dan hapus semua data (termasuk volume)
+docker compose down -v && rm -rf data_lake/bronze/* data_lake/silver/*
+```
+
+---
+
 ## Troubleshooting
 
-- **Dashboard kosong** → tunggu `spark_processor` selesai siklus pertama: `docker logs fuelwatch-spark-processor`
-- **Collector error API** → pastikan `.env` berisi API key valid; sistem tetap jalan dengan data seeder
-- **Reset semua data** → `docker compose down -v && rm -rf data_lake/bronze/* data_lake/silver/*`
-- **Port conflict** → ubah mapping di `docker-compose.yml`
+| Masalah | Solusi |
+|---------|--------|
+| **Dashboard kosong** | Tunggu `spark_processor` selesai siklus pertama: `docker logs fuelwatch-spark-processor` |
+| **Collector error API** | Pastikan `.env` berisi `TOMTOM_API_KEY` yang valid. Sistem tetap jalan dengan data seeder saja |
+| **Port conflict** | Ubah port mapping di `docker-compose.yml` sesuai kebutuhan |
+| **Seeder tidak jalan** | Pastikan PostgreSQL sudah healthy dulu sebelum seeder dimulai |
 
 ---
 
 ## Novelty
 
 | Aspek | MyPertamina | Google Maps | **FuelWatch** |
-|-------|-------------|-------------|---------------|
+|-------|:-----------:|:-----------:|:-------------:|
 | Korelasi BBM ↔ mobilitas | ❌ | ❌ | ✅ |
-| Medallion lakehouse | ❌ | ❌ | ✅ |
+| Medallion Lakehouse | ❌ | ❌ | ✅ |
 | 3 teknik ML (RF + KMeans + Z-score) | ❌ | ❌ | ✅ |
 | Estimasi dampak ekonomi (Rp/hari) | ❌ | ❌ | ✅ |
 | Real-time Kafka streaming | ❌ | Parsial | ✅ |
 
 ---
-
-*Dikembangkan untuk Final Project Mata Kuliah Big Data*
