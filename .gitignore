@@ -1,0 +1,44 @@
+# Environment & secrets
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env.local
+
+# ML artifacts
+ml/saved_models/
+*.keras
+*.h5
+
+# Spark / Kafka checkpoints
+/tmp/
+**/checkpoint/
+**/.checkpoint/
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Docker volumes & lakehouse data
+pg_data/
+redis_data/
+grafana_data/
+data_lake/**/*.parquet
+data_lake/bronze/**/*
+data_lake/silver/**/*
+!data_lake/**/.gitkeep
+
+# Legacy copy (integrated at root)
+fuelwatch_v2/.env
+
+# Logs
+*.log

@@ -1,0 +1,203 @@
+networks:
+  fuelwatch:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+
+services:
+
+  # ── PostgreSQL (Medallion Lakehouse) ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: fuelwatch-postgres
+    environment:
+      POSTGRES_DB: fuelwatch
+      POSTGRES_USER: fuelwatch
+      POSTGRES_PASSWORD: fuelwatch123
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks: [fuelwatch]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fuelwatch -d fuelwatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis (Gold cache + real-time snapshots) ────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: fuelwatch-redis
+    ports:
+      - "6379:6379"
+    networks: [fuelwatch]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Kafka (Apache KRaft — no Zookeeper) ─────────────────────────────────────
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: fuelwatch-kafka
+    hostname: kafka
+    ports:
+      - "9094:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks: [fuelwatch]
+
+  # ── Seeder: historical Bronze data (runs once) ──────────────────────────────
+  seeder:
+    build: ./seeder
+    container_name: fuelwatch-seeder
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      DATA_LAKE_PATH: /data
+    volumes:
+      - ./data_lake:/data
+    restart: "no"
+    networks: [fuelwatch]
+
+  # ── Collector: TomTom + OpenWeather → Kafka + Redis ─────────────────────────
+  collector:
+    build: ./collector
+    container_name: fuelwatch-collector
+    depends_on:
+      kafka:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      seeder:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      KAFKA_BROKER: kafka:29092
+      REDIS_HOST: redis
+    restart: unless-stopped
+    networks: [fuelwatch]
+
+  # ── Bronze Consumer: Kafka → Postgres + Parquet ───────────────────────────
+  bronze_consumer:
+    build: ./bronze_consumer
+    container_name: fuelwatch-bronze-consumer
+    depends_on:
+      kafka:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      seeder:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      KAFKA_BROKER: kafka:29092
+      POSTGRES_HOST: postgres
+      DATA_LAKE_PATH: /data
+    volumes:
+      - ./data_lake:/data
+    restart: unless-stopped
+    networks: [fuelwatch]
+
+  # ── Spark Processor: Bronze → Silver → Gold + ML ────────────────────────────
+  spark_processor:
+    build: ./spark_processor
+    container_name: fuelwatch-spark-processor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seeder:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      DATA_LAKE_PATH: /data
+    volumes:
+      - ./data_lake:/data
+    restart: unless-stopped
+    networks: [fuelwatch]
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ── Streamlit Dashboard (v2 — primary) ──────────────────────────────────────
+  dashboard:
+    build: ./dashboard/streamlit
+    container_name: fuelwatch-dashboard
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      DATA_LAKE_PATH: /data
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data_lake:/data:ro
+    restart: unless-stopped
+    networks: [fuelwatch]
+
+  # ── FastAPI (v1 REST layer — reads Gold + Redis) ────────────────────────────
+  api:
+    build: ./api
+    container_name: fuelwatch-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: fuelwatch
+      POSTGRES_USER: fuelwatch
+      POSTGRES_PASSWORD: fuelwatch123
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DATABASE_URL: postgresql://fuelwatch:fuelwatch123@postgres:5432/fuelwatch
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks: [fuelwatch]
+
+  # ── Leaflet Frontend (v1 — secondary dashboard) ─────────────────────────────
+  frontend:
+    image: nginx:alpine
+    container_name: fuelwatch-frontend
+    volumes:
+      - ./dashboard/frontend:/usr/share/nginx/html:ro
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+    networks: [fuelwatch]
